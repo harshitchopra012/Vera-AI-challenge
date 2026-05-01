@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -872,4 +873,4 @@ def run_server(host: str = "0.0.0.0", port: int = 8080) -> None:
 
 
 if __name__ == "__main__":
-    run_server()
+    run_server(port=int(os.environ.get("PORT", "8080")))
