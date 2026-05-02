@@ -40,7 +40,7 @@ except Exception:  # pragma: no cover - stdlib fallback is used when FastAPI is 
 
 START_TIME = time.time()
 TEAM_NAME = "ContextCraft Vera"
-VERSION = "2.4.1"
+VERSION = "2.5.0"
 
 SCOPES = {"category", "merchant", "customer", "trigger"}
 contexts: dict[tuple[str, str], dict[str, Any]] = {}
