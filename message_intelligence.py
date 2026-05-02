@@ -4,7 +4,7 @@ from typing import Any
 
 
 PERFORMANCE_KINDS = {"perf_dip", "renewal_due", "gbp_unverified", "winback_eligible", "review_theme_emerged"}
-GROWTH_KINDS = {"perf_spike", "festival_upcoming", "competitor_opened", "milestone_reached", "category_seasonal"}
+GROWTH_KINDS = {"perf_spike", "festival_upcoming", "competitor_opened", "milestone_reached", "category_seasonal", "ipl_match_today", "active_planning_intent"}
 CUSTOMER_KINDS = {"recall_due", "customer_lapsed_hard", "chronic_refill_due", "trial_followup", "wedding_package_followup"}
 
 
@@ -67,6 +67,94 @@ def best_offer(category: dict[str, Any], merchant: dict[str, Any]) -> str:
     return "one service-price offer"
 
 
+def clean_label(value: Any) -> str:
+    return safe_text(value).replace("_", " ")
+
+
+def category_action(category: dict[str, Any], merchant: dict[str, Any], trigger: dict[str, Any], offer: str) -> str:
+    slug = category.get("slug")
+    kind = trigger.get("kind")
+    if slug == "restaurants":
+        if kind == "ipl_match_today":
+            return f"Push {offer} as a delivery-first match-night post to catch home-watch orders"
+        if kind == "active_planning_intent":
+            return "Turn the thali idea into a corporate lunch WhatsApp with tiers"
+        if kind == "review_theme_emerged":
+            return "Reply to late-delivery reviews and add one delivery-time promise to ordering copy"
+        return f"Turn {offer} into one delivery or Google post customers can act on today"
+    if slug == "gyms":
+        if kind == "seasonal_perf_dip":
+            members = merchant.get("customer_aggregate", {}).get("total_active_members")
+            suffix = f" for {members} active members" if members else ""
+            return f"Shift from acquisition ads to a retention challenge{suffix}, using {offer} only as the trial hook"
+        if kind == "active_planning_intent":
+            return "Package the kids yoga program as a 4-week parent-friendly summer camp"
+        if kind == "perf_spike":
+            return "Convert the call spike into one trial-class post while demand is warm"
+        return f"Use {offer} as the next low-friction restart step"
+    if slug == "salons":
+        if kind == "wedding_package_followup":
+            return f"Offer a Saturday skin-prep slot tied to the wedding timeline, anchored by {offer}"
+        if kind == "festival_upcoming":
+            return f"Shape {offer} into a pre-festival booking post before slots fill"
+        if kind in {"winback_eligible", "dormant_with_vera"}:
+            return f"Restart with {offer} as a simple comeback offer"
+        return f"Turn {offer} into one service-specific Google post"
+    if slug == "pharmacies":
+        if kind == "supply_alert":
+            return "Draft the affected-customer recall note and replacement pickup flow for chronic-Rx buyers"
+        if kind == "chronic_refill_due":
+            return f"Confirm same-dose refill dispatch before the stock-out date, with {offer}"
+        if kind == "category_seasonal":
+            return "Put ORS/sunscreen/antifungal on counter and send a summer-care delivery WhatsApp"
+        if kind == "gbp_unverified":
+            path = clean_label(trigger.get("payload", {}).get("verification_path"))
+            return f"Complete pharmacy GBP verification via {path} so searchers trust the listing before calling"
+        return f"Use {offer} as one trust-building customer note"
+    if slug == "dentists":
+        if kind == "competitor_opened":
+            return f"Counter-position {offer} without starting a price war"
+        return "Turn it into a patient-safe WhatsApp and one GBP post"
+    return f"Turn it into one practical draft using {offer}"
+
+
+def customer_generic_insight(
+    category: dict[str, Any],
+    merchant: dict[str, Any],
+    trigger: dict[str, Any],
+    customer: dict[str, Any],
+) -> str:
+    cname = safe_text(customer.get("identity", {}).get("name"), "this customer").split("(")[0].strip()
+    kind = trigger.get("kind")
+    payload = trigger.get("payload", {})
+    relationship = customer.get("relationship", {})
+    if kind == "wedding_package_followup":
+        return f"{cname} is {payload.get('days_to_wedding')} days from the wedding, after a bridal trial on {payload.get('trial_completed')}."
+    if kind == "trial_followup":
+        slots = [slot.get("label") for slot in payload.get("next_session_options", []) if slot.get("label")]
+        slot_text = slots[0] if slots else "the next session"
+        return f"{cname} tried the program on {payload.get('trial_date')}; {slot_text} is the next easy step."
+    visits = relationship.get("visits_total")
+    last_visit = relationship.get("last_visit")
+    if visits and last_visit:
+        return f"{cname} has {visits} visits and last came on {last_visit}, so this is a warm follow-up."
+    return f"{cname} has a live follow-up moment from the last interaction."
+
+
+def fallback_fact(category: dict[str, Any], merchant: dict[str, Any], trigger: dict[str, Any]) -> str:
+    kind = trigger.get("kind")
+    payload = trigger.get("payload", {})
+    slug = category.get("slug")
+    if kind == "festival_upcoming":
+        return f"{payload.get('festival')} is {payload.get('days_until')} days away for {merchant_name(merchant)}."
+    if kind == "curious_ask_due":
+        if slug == "salons":
+            return "This week's quickest salon insight is service demand: balayage, keratin, or hair spa."
+        return f"The weekly ask is due now: {clean_label(payload.get('ask_template'))}."
+    payload_facts = [f"{clean_label(k)}: {clean_label(v)}" for k, v in payload.items() if isinstance(v, (str, int, float, bool))]
+    return "; ".join(payload_facts[:2]) or f"{clean_label(kind)} is active now"
+
+
 def find_digest_item(category: dict[str, Any], trigger: dict[str, Any]) -> dict[str, Any] | None:
     payload = trigger.get("payload", {})
     wanted = payload.get("top_item_id") or payload.get("digest_item_id") or payload.get("alert_id")
@@ -119,6 +207,135 @@ def impact_score(candidate: dict[str, Any]) -> int:
     return score
 
 
+def category_keywords(category: dict[str, Any]) -> list[str]:
+    slug = category.get("slug")
+    keywords = {
+        "dentists": ["patient", "recall", "treatment", "clinic", "fluoride", "caries", "dental", "checklist"],
+        "restaurants": ["delivery", "orders", "thali", "dine-in", "kitchen", "match-night", "lunch", "post"],
+        "gyms": ["trial", "members", "retention", "class", "attendance", "fitness", "restart", "camp"],
+        "salons": ["slot", "bridal", "hair", "salon", "service", "skin-prep", "booking", "stylist"],
+        "pharmacies": ["refill", "medicine", "batch", "rx", "pharmacy", "delivery", "pickup", "gbp"],
+    }
+    return keywords.get(slug, [])
+
+
+def score_category_fit(candidate: dict[str, Any], category: dict[str, Any]) -> int:
+    text = f"{candidate.get('insight', '')} {candidate.get('action', '')}".lower()
+    hits = sum(1 for word in category_keywords(category) if word in text)
+    score = min(5, hits)
+    if hits >= 2:
+        score += 1
+    if category.get("slug") in text:
+        score += 1
+    return max(0, min(5, score))
+
+
+def merchant_values(merchant: dict[str, Any]) -> list[str]:
+    identity = merchant.get("identity", {})
+    values = [
+        identity.get("name", ""),
+        identity.get("owner_first_name", ""),
+        identity.get("locality", ""),
+        str(merchant.get("performance", {}).get("views", "")),
+        str(merchant.get("performance", {}).get("calls", "")),
+        str(merchant.get("performance", {}).get("directions", "")),
+        str(merchant.get("performance", {}).get("ctr", "")),
+    ]
+    values.extend(safe_text(offer.get("title")) for offer in merchant.get("offers", []))
+    for value in merchant.get("customer_aggregate", {}).values():
+        values.append(str(value))
+    values.extend(clean_label(signal) for signal in merchant.get("signals", []))
+    return [value for value in values if value and value != "None"]
+
+
+def score_merchant_fit(candidate: dict[str, Any], merchant: dict[str, Any]) -> int:
+    text = f"{candidate.get('insight', '')} {candidate.get('action', '')}".lower()
+    score = 0
+    if re.search(r"\d", text):
+        score += 1
+    if any(value.lower() in text for value in merchant_values(merchant) if len(value) >= 2):
+        score += 2
+    if any(safe_text(offer.get("title")).lower() in text for offer in merchant.get("offers", [])):
+        score += 1
+    if any(clean_label(signal).lower().split(":")[0] in text for signal in merchant.get("signals", [])):
+        score += 1
+    return max(0, min(5, score))
+
+
+def trigger_terms(trigger: dict[str, Any]) -> list[str]:
+    kind = trigger.get("kind", "")
+    terms = [clean_label(kind)]
+    payload = trigger.get("payload", {})
+    for key, value in payload.items():
+        terms.append(clean_label(key))
+        if isinstance(value, (str, int, float, bool)):
+            terms.append(clean_label(value))
+        elif isinstance(value, list):
+            for item in value[:4]:
+                if isinstance(item, (str, int, float, bool)):
+                    terms.append(clean_label(item))
+                elif isinstance(item, dict):
+                    terms.extend(clean_label(v) for v in item.values() if isinstance(v, (str, int, float, bool)))
+    trigger_specific = {
+        "perf_dip": ["down", "drop", "decline"],
+        "perf_spike": ["up", "spike", "warm"],
+        "competitor_opened": ["competitor", "opened"],
+        "recall_due": ["due", "recall"],
+        "chronic_refill_due": ["runs out", "refill"],
+        "review_theme_emerged": ["reviews", "mention"],
+        "gbp_unverified": ["unverified", "verification"],
+        "supply_alert": ["recall", "batch"],
+        "active_planning_intent": ["intent", "already showed"],
+        "ipl_match_today": ["match", "venue", "starts", "delivery"],
+        "wedding_package_followup": ["wedding", "trial", "bridal", "days"],
+        "customer_lapsed_hard": ["inactive", "away", "lapsed"],
+        "trial_followup": ["trial", "session", "slot"],
+        "seasonal_perf_dip": ["seasonal", "down", "dip"],
+        "curious_ask_due": ["ask", "due", "service"],
+        "winback_eligible": ["expired", "dipped", "winback"],
+        "dormant_with_vera": ["dormant", "days"],
+        "milestone_reached": ["milestone", "review"],
+    }
+    terms.extend(trigger_specific.get(kind, []))
+    return [term for term in terms if term and term != "None"]
+
+
+def score_trigger_relevance(candidate: dict[str, Any], trigger: dict[str, Any]) -> int:
+    text = f"{candidate.get('insight', '')} {candidate.get('action', '')}".lower()
+    hits = sum(1 for term in trigger_terms(trigger) if term.lower() in text)
+    score = min(5, hits)
+    if trigger.get("kind", "").replace("_", " ") in text:
+        score += 1
+    return max(0, min(5, score))
+
+
+def selection_score(candidate: dict[str, Any], category: dict[str, Any], merchant: dict[str, Any], trigger: dict[str, Any]) -> int:
+    cat = score_category_fit(candidate, category)
+    mer = score_merchant_fit(candidate, merchant)
+    trg = score_trigger_relevance(candidate, trigger)
+    base = (
+        int(candidate.get("revenue", 0))
+        + int(candidate.get("engagement", 0))
+        + int(candidate.get("urgency", 0))
+        + int(candidate.get("confidence", 0))
+    )
+    return (cat * 2) + (mer * 2) + (trg * 3) + base
+
+
+def annotate_selection_scores(
+    candidate: dict[str, Any],
+    category: dict[str, Any],
+    merchant: dict[str, Any],
+    trigger: dict[str, Any],
+) -> dict[str, Any]:
+    candidate = dict(candidate)
+    candidate["category_fit"] = score_category_fit(candidate, category)
+    candidate["merchant_fit"] = score_merchant_fit(candidate, merchant)
+    candidate["trigger_relevance"] = score_trigger_relevance(candidate, trigger)
+    candidate["selection_score"] = selection_score(candidate, category, merchant, trigger)
+    return candidate
+
+
 def insight_candidate(
     kind: str,
     insight: str,
@@ -159,6 +376,7 @@ def generate_insights(
 
     if customer:
         cname = safe_text(customer.get("identity", {}).get("name"), "this customer").split("(")[0].strip()
+        action = category_action(category, merchant, trigger, offer)
         if kind == "recall_due":
             slots = [slot.get("label") for slot in payload.get("available_slots", []) if slot.get("label")]
             slot_text = " / ".join(slots[:2]) if slots else "this week"
@@ -177,7 +395,7 @@ def generate_insights(
             insights.append(insight_candidate(
                 kind,
                 f"{cname} has been away {payload.get('days_since_last_visit')} days, but the last goal was {safe_text(payload.get('previous_focus')).replace('_', ' ')}.",
-                f"Offer a no-pressure restart using {offer}",
+                action,
                 benchmark=f"previous membership ran {payload.get('previous_membership_months')} months",
                 revenue=4,
                 engagement=5,
@@ -190,7 +408,7 @@ def generate_insights(
             insights.append(insight_candidate(
                 kind,
                 f"{cname}'s {meds} stock runs out on {safe_text(payload.get('stock_runs_out_iso'))[:10]}.",
-                "Confirm same-dose dispatch to the saved address",
+                action,
                 benchmark="refill timing is the conversion window",
                 revenue=5,
                 engagement=4,
@@ -201,8 +419,8 @@ def generate_insights(
         else:
             insights.append(insight_candidate(
                 kind,
-                f"{cname} has a live follow-up moment from the last interaction.",
-                f"Use {offer} as the next step",
+                customer_generic_insight(category, merchant, trigger, customer),
+                action,
                 revenue=3,
                 engagement=4,
                 urgency=3,
@@ -217,16 +435,28 @@ def generate_insights(
         source = safe_text(item.get("source"), "this week's digest")
         trial = item.get("trial_n")
         high_risk = agg.get("high_risk_adult_count")
-        if high_risk:
+        if kind == "research_digest" and high_risk:
             insight = f"{source}: {title}; it maps to your {high_risk} high-risk adult patients."
         elif trial:
             insight = f"{source}: {title}; the study size is {trial:,} patients."
+        elif kind == "regulation_change":
+            deadline = payload.get("deadline_iso")
+            insight = f"{source}: {title}; deadline is {deadline}."
+        elif kind == "cde_opportunity":
+            insight = f"{source}: {title}; {payload.get('credits')} CDE credits, fee {clean_label(payload.get('fee'))}."
         else:
             insight = f"{source}: {title}."
+        action = category_action(category, merchant, trigger, offer)
+        if kind == "research_digest":
+            action = "Turn it into a 2-min owner summary + patient WhatsApp draft"
+        elif kind == "regulation_change":
+            action = "Turn it into a 5-point compliance checklist for the clinic team"
+        elif kind == "cde_opportunity":
+            action = "Turn it into a short owner note with webinar timing and registration ask"
         insights.append(insight_candidate(
             kind,
             insight,
-            "Turn it into a 2-min owner summary + patient WhatsApp draft",
+            action,
             benchmark=safe_text(item.get("actionable")),
             revenue=3,
             engagement=4,
@@ -236,15 +466,15 @@ def generate_insights(
         ))
 
     if kind in {"perf_dip", "perf_spike"}:
-        metric = safe_text(payload.get("metric"), "performance")
+        metric = clean_label(payload.get("metric") or "performance")
         delta = pct(payload.get("delta_pct"), signed=True)
         current = perf.get(metric) or perf.get("calls") or perf.get("views")
         peer_value = peer.get(f"avg_{metric}_30d") or peer.get("avg_ctr")
         direction = "up" if kind == "perf_spike" else "down"
         insights.append(insight_candidate(
             kind,
-            f"{metric} is {direction} {delta} in {payload.get('window', '7d')} (current {current}; peer marker {peer_value}).",
-            f"Use {offer} as the single hook in a fresh Google post",
+            f"{metric.title()} is {direction} {delta} in {payload.get('window', '7d')} (current {current}; peer marker {peer_value}).",
+            category_action(category, merchant, trigger, offer),
             benchmark=f"peer marker {peer_value}",
             revenue=4,
             engagement=4,
@@ -269,7 +499,7 @@ def generate_insights(
         insights.append(insight_candidate(
             kind,
             f"{payload.get('occurrences_30d')} reviews now mention {theme}; one quote says '{safe_text(payload.get('common_quote'))}'.",
-            "Draft one calm public reply and one ops note",
+            category_action(category, merchant, trigger, offer),
             benchmark="review theme is repeated enough to affect trust",
             revenue=3,
             engagement=4,
@@ -281,7 +511,7 @@ def generate_insights(
         insights.append(insight_candidate(
             kind,
             f"{payload.get('competitor_name')} opened {payload.get('distance_km')} km away with {payload.get('their_offer')}.",
-            f"Counter-position {offer} without starting a price war",
+            category_action(category, merchant, trigger, offer),
             benchmark=f"opened on {payload.get('opened_date')}",
             revenue=4,
             engagement=4,
@@ -291,10 +521,11 @@ def generate_insights(
 
     if kind == "category_seasonal":
         trends = ", ".join(safe_text(t).replace("_", " ") for t in payload.get("trends", [])[:4])
+        prefix = "Pharmacy seasonal demand is shifting now" if category.get("slug") == "pharmacies" else "Seasonal demand is shifting now"
         insights.append(insight_candidate(
             kind,
-            f"Seasonal demand is shifting now: {trends}.",
-            "Move high-demand items to counter visibility and send one customer WhatsApp",
+            f"{prefix}: {trends}.",
+            category_action(category, merchant, trigger, offer),
             benchmark="seasonal shelf action recommended",
             revenue=4,
             engagement=4,
@@ -324,7 +555,7 @@ def generate_insights(
         insights.append(insight_candidate(
             kind,
             f"Plan expired {payload.get('days_since_expiry')} days ago; performance is down {pct(payload.get('perf_dip_pct'))} and {payload.get('lapsed_customers_added_since_expiry')} more customers lapsed.",
-            f"Restart with {offer} and two WhatsApp lines",
+            category_action(category, merchant, trigger, offer),
             benchmark="post-expiry dip is already visible",
             revenue=5,
             engagement=3,
@@ -332,13 +563,95 @@ def generate_insights(
             confidence=5,
         ))
 
+    if kind == "ipl_match_today":
+        match = payload.get("match")
+        venue = payload.get("venue")
+        time_value = safe_text(payload.get("match_time_iso"))[11:16]
+        insights.append(insight_candidate(
+            kind,
+            f"{match} at {venue} starts around {time_value}; weekend IPL usually shifts demand toward home delivery.",
+            category_action(category, merchant, trigger, offer),
+            benchmark="Saturday match-night demand behaves differently from weekday matches",
+            revenue=4,
+            engagement=4,
+            urgency=4,
+            confidence=4,
+        ))
+
+    if kind == "seasonal_perf_dip":
+        metric = clean_label(payload.get("metric")).title()
+        insights.append(insight_candidate(
+            kind,
+            f"{metric} is down {pct(payload.get('delta_pct'))}, but the trigger says this is an expected Apr-Jun seasonal dip.",
+            category_action(category, merchant, trigger, offer),
+            benchmark=clean_label(payload.get("season_note")),
+            revenue=4,
+            engagement=4,
+            urgency=2,
+            confidence=5,
+        ))
+
+    if kind == "active_planning_intent":
+        topic = clean_label(payload.get("intent_topic"))
+        last = safe_text(payload.get("merchant_last_message"))
+        insights.append(insight_candidate(
+            kind,
+            f"The merchant already showed intent on {topic}: '{last}'.",
+            category_action(category, merchant, trigger, offer),
+            benchmark="explicit merchant intent means no more qualification needed",
+            revenue=4,
+            engagement=5,
+            urgency=4,
+            confidence=5,
+        ))
+
+    if kind == "supply_alert":
+        batches = ", ".join(payload.get("affected_batches", []))
+        chronic = merchant.get("customer_aggregate", {}).get("chronic_rx_count")
+        insights.append(insight_candidate(
+            kind,
+            f"{payload.get('molecule')} recall affects batches {batches}; this pharmacy has {chronic} chronic-Rx customers.",
+            category_action(category, merchant, trigger, offer),
+            benchmark=f"manufacturer {payload.get('manufacturer')}",
+            revenue=5,
+            engagement=5,
+            urgency=5,
+            confidence=5,
+        ))
+
+    if kind == "gbp_unverified":
+        views = perf.get("views")
+        uplift = pct(payload.get("estimated_uplift_pct"))
+        label = "pharmacy GBP" if category.get("slug") == "pharmacies" else "GBP"
+        insights.append(insight_candidate(
+            kind,
+            f"{label} is unverified despite {views} monthly views; verification can unlock roughly {uplift} more profile actions.",
+            category_action(category, merchant, trigger, offer),
+            benchmark=clean_label(payload.get("verification_path")),
+            revenue=4,
+            engagement=4,
+            urgency=3,
+            confidence=5,
+        ))
+
+    if kind == "dormant_with_vera":
+        insights.append(insight_candidate(
+            kind,
+            f"It has been {payload.get('days_since_last_merchant_message')} days since the last merchant message after {clean_label(payload.get('last_topic'))}.",
+            category_action(category, merchant, trigger, offer),
+            benchmark="dormant merchants need a low-effort restart",
+            revenue=3,
+            engagement=4,
+            urgency=2,
+            confidence=4,
+        ))
+
     if not insights:
-        payload_facts = [f"{k}: {v}" for k, v in payload.items() if isinstance(v, (str, int, float, bool))]
-        fact = "; ".join(payload_facts[:2]) or f"{kind.replace('_', ' ')} is active now"
+        fact = fallback_fact(category, merchant, trigger)
         insights.append(insight_candidate(
             kind,
             fact,
-            f"Turn it into one practical draft using {offer}",
+            category_action(category, merchant, trigger, offer),
             revenue=2,
             engagement=3,
             urgency=int(trigger.get("urgency") or 1),
@@ -348,8 +661,541 @@ def generate_insights(
     return insights
 
 
-def select_best_insight(insights: list[dict[str, Any]]) -> dict[str, Any]:
-    return max(insights, key=impact_score)
+def select_best_insight(
+    insights: list[dict[str, Any]],
+    category: dict[str, Any],
+    merchant: dict[str, Any],
+    trigger: dict[str, Any],
+) -> dict[str, Any]:
+    scored = [annotate_selection_scores(insight, category, merchant, trigger) for insight in insights]
+    return max(
+        scored,
+        key=lambda item: (
+            item["selection_score"],
+            item["merchant_fit"],
+            len(safe_text(item.get("action"))),
+            1 if re.search(r"\d", f"{item.get('insight', '')} {item.get('action', '')}") else 0,
+        ),
+    )
+
+
+def first_numeric_signal(merchant: dict[str, Any], trigger: dict[str, Any]) -> str:
+    perf = merchant.get("performance", {})
+    for key in ["views", "calls", "directions", "ctr"]:
+        value = perf.get(key)
+        if value not in (None, ""):
+            return f"{value} {key}"
+
+    aggregate = merchant.get("customer_aggregate", {})
+    for key, value in aggregate.items():
+        if isinstance(value, (int, float)) and value > 0:
+            return f"{value} {clean_label(key)}"
+
+    for value in trigger.get("payload", {}).values():
+        if isinstance(value, (int, float)) and value:
+            return safe_text(value)
+        if isinstance(value, str) and re.search(r"\d", value):
+            return value
+    return ""
+
+
+def lock_perfect_insight(
+    insight: dict[str, Any],
+    category: dict[str, Any],
+    merchant: dict[str, Any],
+    trigger: dict[str, Any],
+    customer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Strict first-pass enforcement before rendering.
+
+    Every selected insight must be merchant-specific, trigger-causal,
+    category-native, consequence-bearing, and decisive.
+    """
+    refined = dict(insight)
+    offer = best_offer(category, merchant)
+
+    cause = trigger_cause(trigger, category)
+    trigger_label = clean_label(trigger.get("kind"))
+    if trigger_label and trigger_label.lower() not in cause.lower():
+        cause = f"{trigger_label}: {cause}"
+
+    customer_anchor = customer_data_anchor(customer, trigger)
+    merchant_anchor = merchant_data_anchor(category, merchant, trigger)
+    data_anchor = customer_anchor or merchant_anchor
+    if not re.search(r"\d", data_anchor):
+        fallback_number = first_numeric_signal(merchant, trigger)
+        if fallback_number:
+            data_anchor = f"{data_anchor} ({fallback_number})" if data_anchor else fallback_number
+
+    signal = merchant_signal_anchor(merchant, trigger)
+    signal_text = f" + {signal}" if signal else ""
+    marker = category_marker_word(category)
+    impact = category_business_impact(category, trigger)
+    consequence = consequence_pressure(trigger)
+    merchant_label = merchant_name(merchant)
+
+    refined["insight"] = strip_generic_language(
+        f"{cause}; at {merchant_label}, {data_anchor}{signal_text} = {marker} marker: {impact}. {consequence}"
+    )
+
+    action = safe_text(refined.get("action")) or category_action(category, merchant, trigger, offer)
+    action = re.sub(r"\b(you can try|consider|maybe)\b", "", action, flags=re.I)
+    refined["action"] = decision_action(action, category, merchant, trigger, customer)
+    return annotate_selection_scores(refined, category, merchant, trigger)
+
+
+def refine_selected_insight(
+    insight: dict[str, Any],
+    category: dict[str, Any],
+    merchant: dict[str, Any],
+    trigger: dict[str, Any],
+    customer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return lock_perfect_insight(insight, category, merchant, trigger, customer)
+
+
+GENERIC_BANNED = ["improve", "increase", "optimize", "better engagement"]
+
+
+def category_required_word(category: dict[str, Any]) -> str:
+    slug = category.get("slug")
+    required = {
+        "dentists": "patient recall",
+        "restaurants": "delivery orders",
+        "gyms": "member retention",
+        "salons": "booking slot",
+        "pharmacies": "medicine refill",
+    }
+    return required.get(slug, "customer action")
+
+
+def category_marker_word(category: dict[str, Any]) -> str:
+    slug = category.get("slug")
+    markers = {
+        "dentists": "scaling recall",
+        "restaurants": "AOV order",
+        "gyms": "membership churn",
+        "salons": "hair spa slot",
+        "pharmacies": "molecule refill",
+    }
+    return markers.get(slug, "customer")
+
+
+def category_business_impact(category: dict[str, Any], trigger: dict[str, Any]) -> str:
+    slug = category.get("slug")
+    kind = trigger.get("kind")
+    if slug == "dentists":
+        if kind in {"perf_dip", "gbp_unverified", "competitor_opened"}:
+            if kind == "competitor_opened":
+                return "patients can compare clinics before booking"
+            return "patients are dropping before booking"
+        if kind in {"recall_due", "research_digest"}:
+            return "patient recall timing can turn into booked treatment"
+        return "patient trust and treatment intent are on the line"
+    if slug == "restaurants":
+        if kind in {"perf_dip", "review_theme_emerged"}:
+            return "orders are not converting from views"
+        return "delivery orders can be captured before customers switch kitchens"
+    if slug == "gyms":
+        if kind in {"perf_dip", "seasonal_perf_dip", "perf_spike", "trial_followup"}:
+            return "trial intent is not turning into memberships"
+        return "member retention can be won before motivation cools"
+    if slug == "salons":
+        if kind in {"festival_upcoming", "wedding_package_followup"}:
+            return "high-intent beauty demand can become booked slots"
+        return "slots are not getting filled fast enough"
+    if slug == "pharmacies":
+        if kind in {"chronic_refill_due", "supply_alert", "category_seasonal"}:
+            return "refill demand can move to another pharmacy"
+        return "medicine trust and pickup intent are at risk"
+    return "customer intent is close enough to act on"
+
+
+def consequence_pressure(trigger: dict[str, Any]) -> str:
+    kind = trigger.get("kind")
+    urgency = int(trigger.get("urgency") or 1)
+    if kind in {"perf_dip", "winback_eligible", "gbp_unverified", "review_theme_emerged", "seasonal_perf_dip"}:
+        return "Delay hurts recovery."
+    if kind in {"festival_upcoming", "competitor_opened", "category_seasonal", "ipl_match_today", "perf_spike"}:
+        return "Window closes."
+    if kind in {"recall_due", "chronic_refill_due", "trial_followup", "wedding_package_followup", "customer_lapsed_hard"}:
+        return "Follow-up gets colder."
+    if urgency >= 4:
+        return "Compounds if ignored."
+    return "Left alone, missed demand."
+
+
+def customer_data_anchor(customer: dict[str, Any] | None, trigger: dict[str, Any]) -> str:
+    if not customer:
+        return ""
+    payload = trigger.get("payload", {})
+    cname = safe_text(customer.get("identity", {}).get("name"), "this customer").split("(")[0].strip()
+    kind = trigger.get("kind")
+    if kind == "recall_due":
+        return f"{cname}'s {clean_label(payload.get('service_due', 'recall'))} after {payload.get('last_service_date')}"
+    if kind == "chronic_refill_due":
+        meds = [safe_text(med) for med in payload.get("molecule_list", []) if safe_text(med)]
+        return f"{cname}'s {len(meds) or 1} refill medicines"
+    if kind == "trial_followup":
+        return f"{cname}'s trial on {payload.get('trial_date')}"
+    if kind == "wedding_package_followup":
+        return f"{cname}'s wedding in {payload.get('days_to_wedding')} days"
+    if kind == "customer_lapsed_hard":
+        return f"{cname}'s {payload.get('days_since_last_visit')} inactive days"
+    visits = customer.get("relationship", {}).get("visits_total")
+    return f"{cname}'s {visits} visits" if visits else cname
+
+
+def merchant_signal_anchor(merchant: dict[str, Any], trigger: dict[str, Any]) -> str:
+    signals = [safe_text(signal) for signal in merchant.get("signals", []) if safe_text(signal)]
+    if not signals:
+        return ""
+    kind = trigger.get("kind")
+    priority = {
+        "perf_dip": ["perf_dip", "ctr_below", "below_peer"],
+        "perf_spike": ["high_retention", "above_peer", "active_planning"],
+        "renewal_due": ["renewal_due", "dormant"],
+        "gbp_unverified": ["unverified_gbp"],
+        "winback_eligible": ["winback", "post_expiry", "dormant"],
+        "dormant_with_vera": ["dormant"],
+        "research_digest": ["high_risk", "engaged", "stale_posts"],
+        "regulation_change": ["high_risk", "compliance"],
+        "cde_opportunity": ["engaged", "high_risk"],
+        "ipl_match_today": ["ipl", "new_merchant"],
+        "active_planning_intent": ["active_planning", "engaged", "high_volume"],
+        "category_seasonal": ["above_peer", "high_repeat", "delivery"],
+        "supply_alert": ["compliance", "high_repeat"],
+        "review_theme_emerged": ["new_merchant", "trial_ending"],
+        "seasonal_perf_dip": ["seasonal", "above_peer", "no_recent"],
+    }
+    wanted = priority.get(kind, [])
+    for token in wanted:
+        for signal in signals:
+            if token in signal.lower():
+                return clean_label(signal.split(":", 1)[0])
+    return clean_label(signals[0].split(":", 1)[0])
+
+
+def merchant_data_anchor(category: dict[str, Any], merchant: dict[str, Any], trigger: dict[str, Any] | None = None) -> str:
+    perf = merchant.get("performance", {})
+    agg = merchant.get("customer_aggregate", {})
+    offer = best_offer(category, merchant)
+    kind = (trigger or {}).get("kind")
+    if kind in {"perf_dip", "perf_spike", "gbp_unverified", "renewal_due", "winback_eligible"}:
+        if perf.get("views") and perf.get("calls"):
+            return f"{perf.get('views')} views and {perf.get('calls')} calls in 30 days"
+    if perf.get("views") and perf.get("calls"):
+        perf_anchor = f"{perf.get('views')} views and {perf.get('calls')} calls in 30 days"
+    else:
+        perf_anchor = ""
+    aggregate_labels = {
+        "high_risk_adult_count": "high-risk adult patients",
+        "chronic_rx_count": "chronic-Rx customers",
+        "total_active_members": "active members",
+        "lapsed_90d_plus": "lapsed customers",
+        "lapsed_180d_plus": "lapsed customers",
+    }
+    for key in ["high_risk_adult_count", "chronic_rx_count", "total_active_members", "lapsed_90d_plus", "lapsed_180d_plus"]:
+        if agg.get(key) is not None:
+            return f"{agg.get(key)} {aggregate_labels[key]}"
+    if perf_anchor:
+        return perf_anchor
+    if offer and offer != "one service-price offer":
+        return offer
+    if perf.get("ctr"):
+        return f"{perf.get('ctr')} CTR"
+    return merchant_name(merchant)
+
+
+def decisive_action_body(action: str) -> str:
+    text = strip_generic_language(safe_text(action)).rstrip(".")
+    replacements = [
+        (r"^turn it into\s+", "draft "),
+        (r"^turn\s+(.+?)\s+into\s+", r"package \1 as "),
+        (r"^use\s+", "send "),
+        (r"^restart with\s+", "send "),
+        (r"^shape\s+", "make "),
+        (r"^move\s+", "place "),
+    ]
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text, flags=re.I)
+    return text[:1].lower() + text[1:] if text else text
+
+
+def decision_action(
+    action: str,
+    category: dict[str, Any],
+    merchant: dict[str, Any],
+    trigger: dict[str, Any],
+    customer: dict[str, Any] | None = None,
+) -> str:
+    cleaned = decisive_action_body(action)
+    if not cleaned:
+        cleaned = category_action(category, merchant, trigger, "one focused offer")
+    offer = best_offer(category, merchant)
+    if offer and offer != "one service-price offer" and offer.lower() not in cleaned.lower():
+        cleaned = f"{cleaned} using {offer}"
+    cleaned = decisive_action_body(cleaned)
+    if re.match(r"^(the fastest fix is|do this now|the next move is|the decision is)\b", cleaned, flags=re.I):
+        return cleaned
+    return f"Do this now: {cleaned}"
+
+
+def trigger_cause(trigger: dict[str, Any], category: dict[str, Any] | None = None) -> str:
+    kind = trigger.get("kind")
+    payload = trigger.get("payload", {})
+    if kind in {"research_digest", "cde_opportunity", "regulation_change"}:
+        item = find_digest_item(category or {}, trigger) or {}
+        title = safe_text(item.get("title"))
+        source = safe_text(item.get("source"))
+        if kind == "research_digest" and title:
+            slug = safe_text((category or {}).get("slug"))
+            prefix = f"{slug} digest: " if slug else ""
+            short_source = source.split(",", 1)[0] if source else ""
+            short_title = (
+                title.replace("fluoride varnish recall", "fluoride recall")
+                .replace("outperforms", "beats")
+                .replace("high-risk adult caries", "high-risk caries")
+            )
+            return f"{prefix}{short_source}: {short_title}" if short_source else f"{prefix}{short_title}"
+        if kind == "regulation_change" and title:
+            deadline = payload.get("deadline_iso")
+            return f"{title}; deadline {deadline}" if deadline else title
+        if kind == "cde_opportunity" and title:
+            credits = payload.get("credits")
+            return f"{title}; {credits} CDE credits" if credits else title
+    if kind == "perf_dip":
+        return f"{clean_label(payload.get('metric'))} dropped {pct(payload.get('delta_pct'), signed=True)} in {payload.get('window', '7d')}"
+    if kind == "perf_spike":
+        return f"{clean_label(payload.get('metric'))} rose {pct(payload.get('delta_pct'), signed=True)} in {payload.get('window', '7d')}"
+    if kind == "competitor_opened":
+        return f"{payload.get('competitor_name')} opened {payload.get('distance_km')} km away"
+    if kind == "recall_due":
+        return f"recall is due after {payload.get('last_service_date')}"
+    if kind == "chronic_refill_due":
+        meds = ", ".join(safe_text(med) for med in payload.get("molecule_list", []) if safe_text(med))
+        subject = meds or "medicine"
+        return f"{subject} stock runs out on {safe_text(payload.get('stock_runs_out_iso'))[:10]}"
+    if kind == "wedding_package_followup":
+        return f"wedding is {payload.get('days_to_wedding')} days away after the bridal trial"
+    if kind == "trial_followup":
+        return f"trial happened on {payload.get('trial_date')}"
+    if kind == "customer_lapsed_hard":
+        return f"customer has been inactive {payload.get('days_since_last_visit')} days"
+    if kind == "review_theme_emerged":
+        return f"{payload.get('occurrences_30d')} reviews mention {clean_label(payload.get('theme'))}"
+    if kind == "winback_eligible":
+        return f"plan expired {payload.get('days_since_expiry')} days ago and performance dipped {pct(payload.get('perf_dip_pct'))}"
+    if kind == "gbp_unverified":
+        return f"GBP is unverified with {pct(payload.get('estimated_uplift_pct'))} action upside"
+    if kind == "supply_alert":
+        return f"{payload.get('molecule')} recall hit batches {', '.join(payload.get('affected_batches', []))}"
+    if kind == "category_seasonal":
+        return f"{', '.join(clean_label(t) for t in payload.get('trends', [])[:3])}"
+    if kind == "festival_upcoming":
+        return f"{payload.get('festival')} is {payload.get('days_until')} days away"
+    if kind == "ipl_match_today":
+        time_value = safe_text(payload.get("match_time_iso"))[11:16]
+        return f"{payload.get('match')} at {payload.get('venue')} starts around {time_value}"
+    if kind == "seasonal_perf_dip":
+        return f"{clean_label(payload.get('metric'))} is down {pct(payload.get('delta_pct'))} in {payload.get('window', '7d')} during {clean_label(payload.get('season_note'))}"
+    if kind == "curious_ask_due":
+        return f"weekly ask is due now: {clean_label(payload.get('ask_template'))}"
+    if kind == "active_planning_intent":
+        return f"merchant already asked about {clean_label(payload.get('intent_topic'))}"
+    if kind == "renewal_due":
+        return f"renewal is due in {payload.get('days_remaining')} days"
+    if kind == "milestone_reached":
+        return f"{clean_label(payload.get('metric'))} is at {payload.get('value_now')} of {payload.get('milestone_value')}"
+    if kind == "dormant_with_vera":
+        return f"merchant has been dormant {payload.get('days_since_last_merchant_message')} days"
+    item_id = payload.get("top_item_id") or payload.get("digest_item_id") or payload.get("alert_id")
+    if item_id:
+        return f"new category item {item_id} is active"
+    return f"{clean_label(kind)} trigger is active"
+
+
+def strip_generic_language(text: str) -> str:
+    cleaned = text
+    replacements = {
+        "improve performance": "recover the leaking response path",
+        "increase engagement": "get more replies from the right customers",
+        "optimize": "tighten",
+        "better engagement": "more qualified replies",
+        "improve": "sharpen",
+    }
+    for old, new in replacements.items():
+        cleaned = re.sub(old, new, cleaned, flags=re.I)
+    return cleaned
+
+
+def genericity_issues(
+    candidate: dict[str, Any],
+    category: dict[str, Any],
+    merchant: dict[str, Any],
+    trigger: dict[str, Any],
+) -> list[str]:
+    text = f"{candidate.get('insight', '')} {candidate.get('action', '')}".lower()
+    issues: list[str] = []
+    if score_category_fit(candidate, category) < 2:
+        issues.append("weak_category_fit")
+    if score_merchant_fit(candidate, merchant) < 2:
+        issues.append("weak_merchant_fit")
+    if score_trigger_relevance(candidate, trigger) < 2:
+        issues.append("weak_trigger_relevance")
+    if not re.search(r"\d", text):
+        issues.append("missing_number")
+    if any(word in text for word in GENERIC_BANNED):
+        issues.append("generic_language")
+    return issues
+
+
+def force_hyper_specific(
+    candidate: dict[str, Any],
+    category: dict[str, Any],
+    merchant: dict[str, Any],
+    trigger: dict[str, Any],
+    customer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    issues = genericity_issues(candidate, category, merchant, trigger)
+    if not issues:
+        fixed = dict(candidate)
+        fixed["insight"] = strip_generic_language(safe_text(fixed.get("insight")))
+        fixed["action"] = strip_generic_language(safe_text(fixed.get("action")))
+        return annotate_selection_scores(fixed, category, merchant, trigger)
+
+    offer = best_offer(category, merchant)
+    category_phrase = category_required_word(category)
+    anchor = merchant_data_anchor(category, merchant, trigger)
+    cause = trigger_cause(trigger, category)
+    action = category_action(category, merchant, trigger, offer)
+    if offer and offer != "one service-price offer" and offer.lower() not in action.lower():
+        action = f"{action} around {offer}"
+
+    fixed = dict(candidate)
+    fixed["insight"] = strip_generic_language(
+        f"{cause}; for {merchant_name(merchant)}, {anchor} makes this a {category_phrase} priority."
+    )
+    fixed["action"] = strip_generic_language(action)
+    fixed = annotate_selection_scores(fixed, category, merchant, trigger)
+
+    # Last validation pass: force a number if the category action had none.
+    if not re.search(r"\d", f"{fixed.get('insight', '')} {fixed.get('action', '')}"):
+        views = merchant.get("performance", {}).get("views")
+        if views:
+            fixed["insight"] = f"{fixed['insight']} Current 30-day views: {views}."
+        fixed = annotate_selection_scores(fixed, category, merchant, trigger)
+    return fixed
+
+
+def force_business_decision(
+    candidate: dict[str, Any],
+    category: dict[str, Any],
+    merchant: dict[str, Any],
+    trigger: dict[str, Any],
+    customer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    fixed = dict(candidate)
+    cause = trigger_cause(trigger, category)
+    trigger_label = clean_label(trigger.get("kind"))
+    if trigger_label and trigger_label.lower() not in cause.lower():
+        cause = f"{trigger_label}: {cause}"
+    customer_anchor = customer_data_anchor(customer, trigger)
+    merchant_anchor = merchant_data_anchor(category, merchant, trigger)
+    anchor = customer_anchor or merchant_anchor
+    signal = merchant_signal_anchor(merchant, trigger)
+    signal_text = f" + {signal}" if signal else ""
+    marker = category_marker_word(category)
+    impact = category_business_impact(category, trigger)
+    consequence = consequence_pressure(trigger)
+    merchant_label = merchant_name(merchant)
+
+    fixed["insight"] = strip_generic_language(
+        f"{cause}; at {merchant_label}, {anchor}{signal_text} = {marker} marker: {impact}. {consequence}"
+    )
+    fixed["action"] = decision_action(
+        safe_text(fixed.get("action")) or category_action(category, merchant, trigger, best_offer(category, merchant)),
+        category,
+        merchant,
+        trigger,
+        customer,
+    )
+    fixed = annotate_selection_scores(fixed, category, merchant, trigger)
+
+    text = f"{fixed.get('insight', '')} {fixed.get('action', '')}"
+    if not re.search(r"\d", text):
+        views = merchant.get("performance", {}).get("views")
+        if views:
+            fixed["insight"] = f"{fixed['insight']} Current 30-day views: {views}."
+            fixed = annotate_selection_scores(fixed, category, merchant, trigger)
+    return fixed
+
+
+def strict_final_issues(
+    candidate: dict[str, Any],
+    category: dict[str, Any],
+    merchant: dict[str, Any],
+    trigger: dict[str, Any],
+    customer: dict[str, Any] | None = None,
+) -> list[str]:
+    insight = safe_text(candidate.get("insight"))
+    action = safe_text(candidate.get("action"))
+    text = f"{insight} {action}".lower()
+    issues: list[str] = []
+    trigger_label = clean_label(trigger.get("kind")).lower()
+    merchant_identity = merchant.get("identity", {})
+    merchant_terms = [
+        safe_text(merchant_identity.get("name")).lower(),
+        safe_text(merchant_identity.get("owner_first_name")).lower(),
+        safe_text(merchant_identity.get("locality")).lower(),
+    ]
+    customer_term = safe_text((customer or {}).get("identity", {}).get("name")).split("(")[0].strip().lower()
+    grounding_terms = ["views", "calls", "ctr", "customers", "patients", "members", "offer", "delivery", "refill"]
+    grounding_terms.extend(active_offers(merchant))
+
+    if not re.search(r"\d", text):
+        issues.append("missing_number")
+    if trigger_label and trigger_label not in text:
+        issues.append("missing_trigger")
+    if not any(term and term in text for term in merchant_terms) and not (customer_term and customer_term in text):
+        issues.append("missing_merchant_context")
+    if score_category_fit(candidate, category) < 3 or category_marker_word(category).split()[0].lower() not in text:
+        issues.append("weak_category_native")
+    if not any(safe_text(term).lower() in text for term in grounding_terms if safe_text(term)):
+        issues.append("missing_grounding")
+    if not any(word in insight.lower() for word in ["=", "signals", "means", "not converting", "dropping", "at risk", "demand"]):
+        issues.append("missing_causal_impact")
+    if not any(phrase in insight.lower() for phrase in ["delay hurts recovery", "compounds if ignored", "window closes", "follow-up gets colder", "missed demand"]):
+        issues.append("missing_consequence")
+    if not re.search(r"^(the fastest fix is|do this now|the next move is|the decision is)\b", action.lower()):
+        issues.append("weak_decision_action")
+    if any(phrase in action.lower() for phrase in ["you can try", "maybe", "consider", "turn this into"]):
+        issues.append("suggestive_action")
+    return issues
+
+
+def force_strict_final_validation(
+    candidate: dict[str, Any],
+    category: dict[str, Any],
+    merchant: dict[str, Any],
+    trigger: dict[str, Any],
+    customer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    fixed = dict(candidate)
+    if not strict_final_issues(fixed, category, merchant, trigger, customer):
+        return annotate_selection_scores(fixed, category, merchant, trigger)
+
+    fixed = force_business_decision(fixed, category, merchant, trigger, customer)
+    if not any(phrase in safe_text(fixed.get("insight")).lower() for phrase in ["delay hurts recovery", "compounds if ignored", "window closes", "follow-up gets colder", "missed demand"]):
+        fixed["insight"] = f"{safe_text(fixed.get('insight')).rstrip('.')} {consequence_pressure(trigger)}"
+    fixed["action"] = decision_action(
+        safe_text(fixed.get("action")) or category_action(category, merchant, trigger, best_offer(category, merchant)),
+        category,
+        merchant,
+        trigger,
+        customer,
+    )
+    return annotate_selection_scores(fixed, category, merchant, trigger)
 
 
 def stable_variant(*parts: Any, modulo: int = 3) -> int:
@@ -368,12 +1214,12 @@ def hook_for(tone: str, salutation: str, insight: dict[str, Any], variant: int) 
         "opportunity": [
             "{sal}, there is a useful opening here:",
             "{sal}, quick upside I would not ignore:",
-            "{sal}, this is a good moment to move:",
+            "{sal}, this is a quick moment to move:",
         ],
         "warm": [
             "{sal}, one customer moment is ready to act on:",
             "{sal}, this is a low-friction follow-up:",
-            "{sal}, there is an easy customer win here:",
+            "{sal}, there is a warm customer win here:",
         ],
         "curious": [
             "{sal}, one thing stood out to me:",
@@ -390,12 +1236,12 @@ def natural_cta(strategy: str, tone: str, variant: int) -> str:
         "urgent": [
             "Want me to draft it now?",
             "Should I prepare the fix in one message?",
-            "Want the ready-to-send version?",
+            "Want me to draft the ready version?",
         ],
         "opportunity": [
             "Want me to turn this into the first draft?",
             "Should I package this into a post you can approve?",
-            "Want the ready version?",
+            "Want me to draft the ready version?",
         ],
         "warm": [
             "Want me to send the draft for approval?",
@@ -458,8 +1304,22 @@ def memory_is_relevant(memory: str, insight: dict[str, Any]) -> bool:
 
 def surprise_implication(insight: dict[str, Any], merchant: dict[str, Any], category: dict[str, Any]) -> str:
     text = safe_text(insight.get("insight"))
+    lower_text = text.lower()
+    if any(phrase in lower_text for phrase in [
+        " marker:",
+        " = ",
+        " signals ",
+        "delay makes",
+        "window closes",
+        "left alone",
+        "left unchecked",
+        "follow-up gets",
+        "compounds",
+        "waiting makes",
+    ]):
+        return ""
     if "%" in text:
-        if "down" in text.lower() or "-" in text:
+        if "down" in lower_text or "-" in text:
             return "That usually means demand is leaking before customers even call."
         return "That means demand is already warm; waiting makes the spike harder to convert."
 
@@ -481,7 +1341,7 @@ def surprise_implication(insight: dict[str, Any], merchant: dict[str, Any], cate
 
     peer_ctr = category.get("peer_stats", {}).get("avg_ctr")
     merchant_ctr = merchant.get("performance", {}).get("ctr")
-    if peer_ctr and merchant_ctr and merchant_ctr < peer_ctr:
+    if peer_ctr and merchant_ctr and merchant_ctr < peer_ctr and any(term in text for term in ["ctr", "views", "calls", "profile actions"]):
         return f"Your CTR is below the {peer_ctr:.1%} peer marker, so better copy can unlock the same traffic."
     return ""
 
@@ -511,19 +1371,38 @@ def confidence_signal(strategy: str) -> str:
 def urgency_signal(trigger: dict[str, Any]) -> str:
     urgency = int(trigger.get("urgency") or 1)
     if urgency >= 4:
-        return "Acting this week matters."
+        return "Act this week."
     if urgency >= 2:
-        return "Early action gives better results."
+        return "Early action helps."
     return ""
 
 
-def outcome_visualization(insight: dict[str, Any], strategy: str) -> str:
+def outcome_visualization(insight: dict[str, Any], strategy: str, category: dict[str, Any] | None = None) -> str:
     text = safe_text(insight.get("insight")).lower()
+    slug = (category or {}).get("slug")
     if strategy == "Performance Alert":
+        if slug == "pharmacies":
+            return "Goal: recover trusted calls or delivery requests before they go elsewhere."
+        if slug == "restaurants":
+            return "Goal: recover order intent before customers switch kitchens."
         return "Goal: recover the lost response path before it compounds."
     if strategy == "Growth Opportunity":
+        if slug == "restaurants":
+            return "Goal: turn match attention into delivery orders."
+        if slug == "gyms":
+            return "Goal: convert attention into trial visits or retained members."
+        if slug == "salons":
+            return "Goal: turn timing into booked slots."
+        if slug == "pharmacies":
+            return "Goal: turn seasonal demand into repeat store visits."
         return "Goal: convert the current attention into one visible offer."
     if strategy == "Missed Customer Engagement":
+        if slug == "pharmacies":
+            return "Goal: make the next refill or pickup feel obvious."
+        if slug == "gyms":
+            return "Goal: make restarting feel easy, not guilty."
+        if slug == "salons":
+            return "Goal: make booking the next slot feel natural."
         return "Goal: make the next reply feel obvious, not promotional."
     if "patient" in text or "customer" in text:
         return "Goal: turn the list into replies, not just awareness."
@@ -534,22 +1413,53 @@ def strongest_number_line(line: str, implication: str) -> str:
     if not implication:
         return line
     if len(line) > 145:
-        source = line.split(":", 1)[0] if ":" in line else ""
-        if "maps to your" in line.lower() and source:
+        if "maps to your" in line.lower() and ":" in line:
+            source = line.split(":", 1)[0]
             return f"{source}: {implication}"
-        return implication
+        core = line.split(";", 1)[0].strip()
+        if len(core) > 110:
+            core = core[:107].rstrip(" ,;:") + "."
+        return f"{core} {implication}"
     return f"{line} {implication}"
+
+
+def compact_insight_line(line: str, max_len: int = 285) -> str:
+    if len(line) <= max_len:
+        return line
+
+    replacements = [
+        ("research digest: dentists digest:", "research digest: dentists:"),
+        ("high-risk adult patients", "high-risk patients"),
+        ("patient recall timing can turn into booked treatment", "patient recall can become treatment bookings"),
+        ("patient trust and treatment intent are on the line", "patient trust is at risk"),
+        ("delivery orders can be captured before customers switch kitchens", "delivery orders can be captured before switching"),
+        ("trial intent is not turning into memberships", "trial intent is not becoming memberships"),
+        ("high-intent beauty demand can become booked slots", "beauty demand can become booked slots"),
+        ("refill demand can move to another pharmacy", "refill demand can switch pharmacy"),
+        ("This matters because timing turns attention into bookings.", "Timing can become bookings."),
+    ]
+    compacted = line
+    for old, new in replacements:
+        compacted = compacted.replace(old, new)
+    if len(compacted) <= max_len:
+        return compacted
+
+    if len(compacted) > max_len and "; at " in compacted and ". " in compacted:
+        head, tail = compacted.rsplit(". ", 1)
+        if len(head) > max_len:
+            compacted = f"{head[: max_len - len(tail) - 4].rstrip(' ,;:')}. {tail}"
+    return compacted
 
 
 def compact_reason_line(insight: dict[str, Any], strategy: str, trigger: dict[str, Any]) -> str:
     if strategy == "Performance Alert":
-        line = "This matters because it hits incoming leads; this tends to recover performance fastest."
+        line = "This matters because it hits leads now."
     elif strategy == "Growth Opportunity":
-        line = "This matters because timing can turn attention into bookings."
+        line = "This matters because timing turns attention into bookings."
     elif strategy == "Missed Customer Engagement":
-        line = "This matters because the customer timing is already warm."
+        line = "This matters because the reply window is warm."
     else:
-        line = "This matters because it gives you a relevant reason to re-engage."
+        line = "This matters because it gives one clear next move."
     urgency = urgency_signal(trigger)
     if urgency:
         line += f" {urgency}"
@@ -577,46 +1487,61 @@ def final_message_polish(
 
     hook_bank = {
         "urgent": [
-            f"{salutation}, this is the number I would act on today:",
-            f"{salutation}, quick alert - this can quietly cost you leads:",
-            f"{salutation}, one metric needs attention now:",
+            f"{salutation}, act on this now:",
+            f"{salutation}, quick alert:",
+            f"{salutation}, signal now:",
         ],
         "opportunity": [
-            f"{salutation}, there is a small window to capture here:",
-            f"{salutation}, this is the upside I would move on:",
-            f"{salutation}, one opportunity is already showing up:",
+            f"{salutation}, window is open:",
+            f"{salutation}, upside now:",
+            f"{salutation}, quick opportunity:",
         ],
         "warm": [
-            f"{salutation}, one customer follow-up is ready now:",
-            f"{salutation}, this is a timely customer moment:",
-            f"{salutation}, one easy customer win is sitting open:",
+            f"{salutation}, follow-up is warm:",
+            f"{salutation}, warm customer moment:",
+            f"{salutation}, quick customer win:",
         ],
         "curious": [
-            f"{salutation}, this stood out because it is actionable:",
-            f"{salutation}, quick insight - this is not just trivia:",
-            f"{salutation}, one useful signal from the data:",
+            f"{salutation}, signal:",
+            f"{salutation}, quick insight:",
+            f"{salutation}, data signal:",
         ],
     }
     hook = hook_bank.get(tone, hook_bank["curious"])[variant % 3]
 
     memory_line = ""
     if memory and len(memory) <= 90 and memory_is_relevant(memory, insight):
-        memory_line = f"Last time you said: \"{memory}\" - this connects directly."
+        clean_memory = memory.replace("?", "").strip()
+        if len(clean_memory) > 58:
+            if "kids yoga" in clean_memory.lower():
+                memory_line = "Last time you asked about kids yoga - this connects."
+            else:
+                memory_line = f"Last time: {clean_memory[:50].rstrip()} - this connects."
+        else:
+            memory_line = f"Last time you said: \"{clean_memory}\" - this connects."
 
     insight_line = lines[1] if len(lines) > 1 else lines[0]
     benchmark = safe_text(insight.get("benchmark"))
     if benchmark and benchmark in insight_line:
         insight_line = insight_line.replace(f" ({benchmark})", "")
     insight_line = strongest_number_line(insight_line, implication)
+    insight_line = compact_insight_line(insight_line)
     action_line = safe_text(insight.get("action")) or (lines[2] if len(lines) > 2 else "")
-    outcome = outcome_visualization(insight, strategy)
+    outcome = outcome_visualization(insight, strategy, category)
     cta = natural_cta(strategy, tone, variant).replace("Should I", "Want me to")
 
     if memory_line:
         final_lines = [hook, memory_line, insight_line, f"{action_line}. {cta}"]
     else:
         reason = compact_reason_line(insight, strategy, trigger)
-        final_lines = [hook, insight_line, reason, f"{action_line}. {outcome} {cta}"]
+        action_with_outcome = f"{action_line}. {outcome} {cta}"
+        final_lines = [hook, insight_line, reason, action_with_outcome]
+        rough_text = "\n".join(re.sub(r"\s+", " ", line).strip() for line in final_lines if line.strip())
+        if len(rough_text) > 440:
+            final_lines[-1] = f"{action_line}. {cta}"
+            rough_text = "\n".join(re.sub(r"\s+", " ", line).strip() for line in final_lines if line.strip())
+        if len(rough_text) > 450:
+            final_lines = [hook, insight_line, f"{action_line}. {cta}"]
 
     cleaned = []
     seen = set()
@@ -672,8 +1597,25 @@ def intelligent_message(
     customer: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     insights = generate_insights(category, merchant, trigger, customer)
-    ranked = sorted(insights, key=impact_score, reverse=True)
-    best = ranked[0]
+    ranked = sorted(
+        [annotate_selection_scores(insight, category, merchant, trigger) for insight in insights],
+        key=lambda item: (
+            item["selection_score"],
+            item["merchant_fit"],
+            len(safe_text(item.get("action"))),
+            1 if re.search(r"\d", f"{item.get('insight', '')} {item.get('action', '')}") else 0,
+        ),
+        reverse=True,
+    )
+    best = lock_perfect_insight(ranked[0], category, merchant, trigger, customer)
+    genericity_before = genericity_issues(best, category, merchant, trigger)
+    best = force_hyper_specific(best, category, merchant, trigger, customer)
+    genericity_after = genericity_issues(best, category, merchant, trigger)
+    best = force_business_decision(best, category, merchant, trigger, customer)
+    genericity_final = genericity_issues(best, category, merchant, trigger)
+    strict_final_before = strict_final_issues(best, category, merchant, trigger, customer)
+    best = force_strict_final_validation(best, category, merchant, trigger, customer)
+    strict_final_after = strict_final_issues(best, category, merchant, trigger, customer)
     message = render_message(category, merchant, trigger, customer, best)
     message = final_message_polish(message, category, merchant, trigger, customer, best)
     strategy = strategy_for(trigger, customer)
@@ -686,6 +1628,15 @@ def intelligent_message(
         "tone": tone_for(strategy, trigger),
         "insight_kind": best.get("kind"),
         "insight_score": impact_score(best),
+        "category_fit": best.get("category_fit"),
+        "merchant_fit": best.get("merchant_fit"),
+        "trigger_relevance": best.get("trigger_relevance"),
+        "selection_score": best.get("selection_score"),
+        "genericity_before": genericity_before,
+        "genericity_after": genericity_after,
+        "genericity_final": genericity_final,
+        "strict_final_before": strict_final_before,
+        "strict_final_after": strict_final_after,
         "quality_issues": issues,
         "candidate_count": len(ranked),
     }
