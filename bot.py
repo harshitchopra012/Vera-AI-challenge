@@ -20,7 +20,7 @@ except Exception:  # pragma: no cover - stdlib fallback is used when FastAPI is 
 
 START_TIME = time.time()
 TEAM_NAME = "ContextCraft Vera"
-VERSION = "1.5.0"
+VERSION = "2.4.0"
 
 SCOPES = {"category", "merchant", "customer", "trigger"}
 contexts: dict[tuple[str, str], dict[str, Any]] = {}
@@ -540,7 +540,7 @@ def compose(category: dict, merchant: dict, trigger: dict, customer: dict | None
         "cta": cta_for(kind, customer),
         "send_as": send_as(trigger, customer),
         "suppression_key": trigger.get("suppression_key", ""),
-        "rationale": f"{rationale(kind, category, merchant, trigger, customer)}; insight_score={intelligence.get('insight_score')}; candidates={intelligence.get('candidate_count')}",
+        "rationale": f"{rationale(kind, category, merchant, trigger, customer)}; selection_score={intelligence.get('selection_score')}; fit=cat{intelligence.get('category_fit')}/mer{intelligence.get('merchant_fit')}/trg{intelligence.get('trigger_relevance')}; candidates={intelligence.get('candidate_count')}",
     }
     return result
 
@@ -716,7 +716,7 @@ def metadata_payload() -> dict[str, Any]:
         "team_name": TEAM_NAME,
         "team_members": ["Harsh"],
         "model": "deterministic-context-composer",
-        "approach": "stateful message engine with insight ranking, conversion polish, quality filtering, suppression, and replay handlers",
+        "approach": "stateful message engine with fit-based insight ranking, strict genericity rejection, strict final validation, business-decision rewriting, conversion polish, suppression, and replay handlers",
         "contact_email": "not-provided@example.com",
         "version": VERSION,
         "submitted_at": "2026-05-01T00:00:00Z",
