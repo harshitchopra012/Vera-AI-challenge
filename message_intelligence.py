@@ -15,12 +15,18 @@ def safe_text(value: Any, default: str = "") -> str:
 
 
 def pct(value: Any, signed: bool = False) -> str:
+    text = safe_text(value)
     try:
-        number = float(value)
+        number = float(text.replace("%", ""))
     except Exception:
-        return safe_text(value)
-    shown = round(number * 100)
-    return f"{shown:+d}%" if signed else f"{abs(shown)}%"
+        return text
+    shown = number * 100 if abs(number) <= 1 else number
+    shown = round(shown, 1)
+    shown_text = f"{int(shown)}" if shown == int(shown) else f"{shown:.1f}"
+    if signed:
+        prefix = "+" if shown > 0 else ""
+        return f"{prefix}{shown_text}%"
+    return f"{abs(shown):g}%"
 
 
 def money(value: Any) -> str:
@@ -112,6 +118,20 @@ def category_action(category: dict[str, Any], merchant: dict[str, Any], trigger:
             return f"Complete pharmacy GBP verification via {path} so searchers trust the listing before calling"
         return f"Use {offer} as one trust-building customer note"
     if slug == "dentists":
+        if kind == "perf_dip":
+            return f"Post {offer} as one booking-focused Google profile update"
+        if kind == "perf_spike":
+            return f"Turn the call spike into a treatment-booking Google post with {offer}"
+        if kind == "gbp_unverified":
+            return "Complete Google profile verification so patients trust the clinic before calling"
+        if kind == "renewal_due":
+            return "Draft a one-page ROI note using views, calls, and direction taps before renewal"
+        if kind == "regulation_change":
+            return "Draft a 5-point radiograph safety checklist for the clinic team"
+        if kind == "research_digest":
+            return "Draft a 2-minute owner summary and patient recall WhatsApp"
+        if kind == "cde_opportunity":
+            return "Draft an owner note with webinar timing and CDE registration"
         if kind == "competitor_opened":
             return f"Counter-position {offer} without starting a price war"
         return "Turn it into a patient-safe WhatsApp and one GBP post"
@@ -715,9 +735,6 @@ def lock_perfect_insight(
     offer = best_offer(category, merchant)
 
     cause = trigger_cause(trigger, category)
-    trigger_label = clean_label(trigger.get("kind"))
-    if trigger_label and trigger_label.lower() not in cause.lower():
-        cause = f"{trigger_label}: {cause}"
 
     customer_anchor = customer_data_anchor(customer, trigger)
     merchant_anchor = merchant_data_anchor(category, merchant, trigger)
@@ -728,14 +745,14 @@ def lock_perfect_insight(
             data_anchor = f"{data_anchor} ({fallback_number})" if data_anchor else fallback_number
 
     signal = merchant_signal_anchor(merchant, trigger)
-    signal_text = f" + {signal}" if signal else ""
-    marker = category_marker_word(category)
+    signal_text = f" and {signal}" if signal else ""
+    signal_verb = "show" if signal else "shows"
     impact = category_business_impact(category, trigger)
     consequence = consequence_pressure(trigger)
     merchant_label = merchant_name(merchant)
 
     refined["insight"] = strip_generic_language(
-        f"{cause}; at {merchant_label}, {data_anchor}{signal_text} = {marker} marker: {impact}. {consequence}"
+        f"{cause}; for {merchant_label}, {data_anchor}{signal_text} {signal_verb} {impact}. {consequence}"
     )
 
     action = safe_text(refined.get("action")) or category_action(category, merchant, trigger, offer)
@@ -847,6 +864,20 @@ def customer_data_anchor(customer: dict[str, Any] | None, trigger: dict[str, Any
 
 
 def merchant_signal_anchor(merchant: dict[str, Any], trigger: dict[str, Any]) -> str:
+    def friendly(signal: str) -> str:
+        label = clean_label(signal.split(":", 1)[0])
+        replacements = {
+            "high risk adult cohort": "high-risk recall cohort",
+            "ctr below peer median": "below-peer CTR",
+            "perf dip severe": "severe performance dip",
+            "renewal due soon": "renewal due soon",
+            "unverified gbp": "unverified Google profile",
+            "engaged in last 48h": "recent merchant engagement",
+            "above peer median calls": "above-peer calls",
+            "high engagement": "high customer engagement",
+        }
+        return replacements.get(label, label)
+
     signals = [safe_text(signal) for signal in merchant.get("signals", []) if safe_text(signal)]
     if not signals:
         return ""
@@ -872,8 +903,8 @@ def merchant_signal_anchor(merchant: dict[str, Any], trigger: dict[str, Any]) ->
     for token in wanted:
         for signal in signals:
             if token in signal.lower():
-                return clean_label(signal.split(":", 1)[0])
-    return clean_label(signals[0].split(":", 1)[0])
+                return friendly(signal)
+    return friendly(signals[0])
 
 
 def merchant_data_anchor(category: dict[str, Any], merchant: dict[str, Any], trigger: dict[str, Any] | None = None) -> str:
@@ -919,6 +950,8 @@ def decisive_action_body(action: str) -> str:
     ]
     for pattern, replacement in replacements:
         text = re.sub(pattern, replacement, text, flags=re.I)
+    if re.match(r"^(the fastest fix is|do this now|the next move is|the decision is)\b", text, flags=re.I):
+        return text[:1].upper() + text[1:]
     return text[:1].lower() + text[1:] if text else text
 
 
@@ -933,7 +966,15 @@ def decision_action(
     if not cleaned:
         cleaned = category_action(category, merchant, trigger, "one focused offer")
     offer = best_offer(category, merchant)
-    if offer and offer != "one service-price offer" and offer.lower() not in cleaned.lower():
+    kind = trigger.get("kind")
+    offer_relevant = kind not in {
+        "regulation_change",
+        "cde_opportunity",
+        "supply_alert",
+        "gbp_unverified",
+        "active_planning_intent",
+    }
+    if offer_relevant and offer and offer != "one service-price offer" and offer.lower() not in cleaned.lower():
         cleaned = f"{cleaned} using {offer}"
     cleaned = decisive_action_body(cleaned)
     if re.match(r"^(the fastest fix is|do this now|the next move is|the decision is)\b", cleaned, flags=re.I):
@@ -1069,7 +1110,7 @@ def force_hyper_specific(
     anchor = merchant_data_anchor(category, merchant, trigger)
     cause = trigger_cause(trigger, category)
     action = category_action(category, merchant, trigger, offer)
-    if offer and offer != "one service-price offer" and offer.lower() not in action.lower():
+    if trigger.get("kind") not in {"regulation_change", "cde_opportunity", "supply_alert", "gbp_unverified", "active_planning_intent"} and offer and offer != "one service-price offer" and offer.lower() not in action.lower():
         action = f"{action} around {offer}"
 
     fixed = dict(candidate)
@@ -1097,21 +1138,18 @@ def force_business_decision(
 ) -> dict[str, Any]:
     fixed = dict(candidate)
     cause = trigger_cause(trigger, category)
-    trigger_label = clean_label(trigger.get("kind"))
-    if trigger_label and trigger_label.lower() not in cause.lower():
-        cause = f"{trigger_label}: {cause}"
     customer_anchor = customer_data_anchor(customer, trigger)
     merchant_anchor = merchant_data_anchor(category, merchant, trigger)
     anchor = customer_anchor or merchant_anchor
     signal = merchant_signal_anchor(merchant, trigger)
-    signal_text = f" + {signal}" if signal else ""
-    marker = category_marker_word(category)
+    signal_text = f" and {signal}" if signal else ""
+    signal_verb = "show" if signal else "shows"
     impact = category_business_impact(category, trigger)
     consequence = consequence_pressure(trigger)
     merchant_label = merchant_name(merchant)
 
     fixed["insight"] = strip_generic_language(
-        f"{cause}; at {merchant_label}, {anchor}{signal_text} = {marker} marker: {impact}. {consequence}"
+        f"{cause}; for {merchant_label}, {anchor}{signal_text} {signal_verb} {impact}. {consequence}"
     )
     fixed["action"] = decision_action(
         safe_text(fixed.get("action")) or category_action(category, merchant, trigger, best_offer(category, merchant)),
@@ -1142,7 +1180,6 @@ def strict_final_issues(
     action = safe_text(candidate.get("action"))
     text = f"{insight} {action}".lower()
     issues: list[str] = []
-    trigger_label = clean_label(trigger.get("kind")).lower()
     merchant_identity = merchant.get("identity", {})
     merchant_terms = [
         safe_text(merchant_identity.get("name")).lower(),
@@ -1155,15 +1192,15 @@ def strict_final_issues(
 
     if not re.search(r"\d", text):
         issues.append("missing_number")
-    if trigger_label and trigger_label not in text:
+    if score_trigger_relevance(candidate, trigger) < 2:
         issues.append("missing_trigger")
     if not any(term and term in text for term in merchant_terms) and not (customer_term and customer_term in text):
         issues.append("missing_merchant_context")
-    if score_category_fit(candidate, category) < 3 or category_marker_word(category).split()[0].lower() not in text:
+    if score_category_fit(candidate, category) < 3:
         issues.append("weak_category_native")
     if not any(safe_text(term).lower() in text for term in grounding_terms if safe_text(term)):
         issues.append("missing_grounding")
-    if not any(word in insight.lower() for word in ["=", "signals", "means", "not converting", "dropping", "at risk", "demand"]):
+    if not any(word in insight.lower() for word in ["show", "shows", "signals", "means", "not converting", "dropping", "at risk", "demand"]):
         issues.append("missing_causal_impact")
     if not any(phrase in insight.lower() for phrase in ["delay hurts recovery", "compounds if ignored", "window closes", "follow-up gets colder", "missed demand"]):
         issues.append("missing_consequence")
@@ -1308,6 +1345,8 @@ def surprise_implication(insight: dict[str, Any], merchant: dict[str, Any], cate
     if any(phrase in lower_text for phrase in [
         " marker:",
         " = ",
+        " show ",
+        " shows ",
         " signals ",
         "delay makes",
         "window closes",
@@ -1419,7 +1458,8 @@ def strongest_number_line(line: str, implication: str) -> str:
         core = line.split(";", 1)[0].strip()
         if len(core) > 110:
             core = core[:107].rstrip(" ,;:") + "."
-        return f"{core} {implication}"
+        separator = " " if core.endswith((".", "!", "?")) else " - "
+        return f"{core}{separator}{implication}"
     return f"{line} {implication}"
 
 
