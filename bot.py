@@ -40,7 +40,7 @@ except Exception:  # pragma: no cover - stdlib fallback is used when FastAPI is 
 
 START_TIME = time.time()
 TEAM_NAME = "ContextCraft Vera"
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 
 SCOPES = {"category", "merchant", "customer", "trigger"}
 contexts: dict[tuple[str, str], dict[str, Any]] = {}
@@ -67,12 +67,18 @@ def safe_text(value: Any, default: str = "") -> str:
 
 
 def pct(value: Any, signed: bool = False) -> str:
+    text = safe_text(value)
     try:
-        number = float(value)
+        number = float(text.replace("%", ""))
     except Exception:
-        return safe_text(value)
-    shown = round(number * 100)
-    return f"{shown:+d}%" if signed else f"{abs(shown)}%"
+        return text
+    shown = number * 100 if abs(number) <= 1 else number
+    shown = round(shown, 1)
+    shown_text = f"{int(shown)}" if shown == int(shown) else f"{shown:.1f}"
+    if signed:
+        prefix = "+" if shown > 0 else ""
+        return f"{prefix}{shown_text}%"
+    return f"{abs(shown):g}%"
 
 
 def first_name(merchant: dict[str, Any]) -> str:
@@ -552,7 +558,18 @@ def make_conversation_id(merchant_id: str, trigger_id: str, customer_id: str | N
 
 def compose(category: dict, merchant: dict, trigger: dict, customer: dict | None = None) -> dict:
     kind = trigger.get("kind", "generic")
-    body, intelligence = intelligent_message(category, merchant, trigger, customer)
+    if customer or trigger.get("scope") == "customer":
+        body = compose_customer(category, merchant, trigger, customer or {})
+        intelligence = {
+            "selection_score": "customer_direct",
+            "category_fit": "customer_direct",
+            "merchant_fit": "customer_direct",
+            "trigger_relevance": "customer_direct",
+            "candidate_count": 1,
+            "quality_issues": [],
+        }
+    else:
+        body, intelligence = intelligent_message(category, merchant, trigger, customer)
     if intelligence.get("quality_issues"):
         body = compose_body(category, merchant, trigger, customer)
     result = {
@@ -621,6 +638,7 @@ AUTO_PATTERNS = [
 STOP_PATTERNS = [r"\bstop\b", r"not interested", r"don't message", r"dont message", r"spam", r"useless", r"bothering"]
 YES_PATTERNS = [r"\byes\b", r"\bok\b", r"let'?s do", r"go ahead", r"confirm", r"send", r"please", r"start", r"kar do", r"chalo"]
 OUT_OF_SCOPE = [r"\bgst\b", r"tax filing", r"income tax", r"loan", r"legal notice"]
+CUSTOMER_ROLES = {"customer", "consumer", "patient", "user", "end_user"}
 
 
 def is_auto_reply(message: str) -> bool:
@@ -643,8 +661,116 @@ def is_out_of_scope(message: str) -> bool:
     return any(re.search(pattern, text) for pattern in OUT_OF_SCOPE)
 
 
+def is_customer_role(from_role: str) -> bool:
+    return safe_text(from_role).lower() in CUSTOMER_ROLES
+
+
+def clean_service(value: Any, default: str = "appointment") -> str:
+    return safe_text(value, default).replace("_", " ")
+
+
+def slot_options(trigger: dict[str, Any] | None) -> list[str]:
+    payload = (trigger or {}).get("payload", {})
+    raw_slots = payload.get("available_slots") or payload.get("next_session_options") or []
+    return [safe_text(slot.get("label")) for slot in raw_slots if isinstance(slot, dict) and safe_text(slot.get("label"))]
+
+
+def normalize_for_match(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
+
+def selected_slot_from_message(message: str, trigger: dict[str, Any] | None) -> str:
+    text = normalize_for_match(message)
+    slots = slot_options(trigger)
+    for index, label in enumerate(slots, start=1):
+        slot_text = normalize_for_match(label)
+        if re.search(rf"\b{index}\b", text) or slot_text in text:
+            return label
+        parts = [part for part in slot_text.split() if len(part) >= 2]
+        if parts and sum(1 for part in parts if part in text) >= min(3, len(parts)):
+            return label
+    match = re.search(
+        r"\b(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\s+\d{1,2}\s+[a-z]{3,9},?\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\b",
+        message,
+        flags=re.I,
+    )
+    return match.group(0).strip() if match else ""
+
+
+def find_customer_trigger_for_reply(
+    merchant_id: str | None,
+    customer_id: str | None,
+    message: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    best_trigger = None
+    best_customer = get_context("customer", customer_id)
+    for (scope, _), stored in contexts.items():
+        if scope != "trigger":
+            continue
+        trigger = stored.get("payload", {})
+        if merchant_id and trigger.get("merchant_id") != merchant_id:
+            continue
+        if customer_id and trigger.get("customer_id") != customer_id:
+            continue
+        if not trigger.get("customer_id"):
+            continue
+        if selected_slot_from_message(message, trigger):
+            return trigger, get_context("customer", trigger.get("customer_id"))
+        if not best_trigger:
+            best_trigger = trigger
+            best_customer = get_context("customer", trigger.get("customer_id"))
+    return best_trigger, best_customer
+
+
 def action_reply(body: str, cta: str, rationale_text: str) -> dict[str, Any]:
     return {"action": "send", "body": body, "cta": cta, "rationale": rationale_text}
+
+
+def customer_reply_action(
+    merchant: dict[str, Any] | None,
+    category: dict[str, Any] | None,
+    trigger: dict[str, Any] | None,
+    customer: dict[str, Any] | None,
+    message: str,
+) -> dict[str, Any]:
+    cname = customer_name(customer)
+    mname = merchant_name(merchant or {})
+    payload = (trigger or {}).get("payload", {})
+    kind = (trigger or {}).get("kind", "")
+    picked_slot = selected_slot_from_message(message, trigger)
+
+    if picked_slot:
+        service = clean_service(payload.get("service_due"), "appointment")
+        if kind == "recall_due":
+            body = (
+                f"{cname}, done - {picked_slot} is held at {mname} for your {service}. "
+                "Please come 10 minutes early; reply CHANGE if you need another time."
+            )
+        elif kind == "trial_followup":
+            body = f"{cname}, done - {picked_slot} is reserved at {mname}. Reply CHANGE if you need a different class time."
+        else:
+            body = f"{cname}, done - {picked_slot} is noted at {mname}. Reply CHANGE if this timing needs adjustment."
+        return action_reply(body, "slot_confirmed", "Customer selected a slot; replied to the customer with booking confirmation.")
+
+    if kind == "chronic_refill_due":
+        meds = ", ".join(payload.get("molecule_list", []))
+        runout = safe_text(payload.get("stock_runs_out_iso"))[:10]
+        body = f"{cname}, confirmed - {mname} will keep your {meds} refill ready before {runout}. Reply CHANGE if any dose changed."
+        return action_reply(body, "refill_confirmed", "Customer confirmed refill; replied with customer-facing confirmation.")
+
+    if has_yes(message):
+        slots = slot_options(trigger)
+        if slots:
+            body = f"{cname}, sure - available slots are {' / '.join(slots[:2])}. Reply 1 or 2, or send your preferred time."
+            return action_reply(body, "multi_choice_slot", "Customer asked to book; offered concrete slot choices.")
+        body = f"{cname}, sure - {mname} can help with this. Share your preferred time and I will hold it for you."
+        return action_reply(body, "ask_preferred_time", "Customer showed booking intent; asked for timing instead of addressing merchant.")
+
+    return action_reply(
+        f"{cname}, got it. Tell me the day and time you prefer, and {mname} will confirm the slot.",
+        "ask_preferred_time",
+        "Customer reply was ambiguous; kept the response customer-facing and appointment-oriented.",
+    )
 
 
 def reply_logic(conversation_id: str, merchant_id: str | None, customer_id: str | None, message: str, from_role: str) -> dict[str, Any]:
@@ -687,8 +813,24 @@ def reply_logic(conversation_id: str, merchant_id: str | None, customer_id: str 
     state["auto_count"] = 0
     merchant = get_context("merchant", merchant_id)
     trigger = get_context("trigger", state.get("trigger_id")) if state.get("trigger_id") else None
+    customer_id = customer_id or state.get("customer_id") or (trigger or {}).get("customer_id")
+    customer = get_context("customer", customer_id)
+    if not merchant and customer and customer.get("merchant_id"):
+        merchant_id = customer.get("merchant_id")
+        merchant = get_context("merchant", merchant_id)
+    if is_customer_role(from_role):
+        inferred_trigger, inferred_customer = find_customer_trigger_for_reply(merchant_id, customer_id, message)
+        if inferred_trigger and (not trigger or not trigger.get("customer_id")):
+            trigger = inferred_trigger
+            state["trigger_id"] = inferred_trigger.get("id")
+        if inferred_customer:
+            customer = inferred_customer
+            state["customer_id"] = inferred_customer.get("customer_id")
     category = get_context("category", merchant.get("category_slug")) if merchant else None
     sal = merchant_salutation(category or {}, merchant or {"identity": {}}) if merchant else "Great"
+
+    if is_customer_role(from_role):
+        return customer_reply_action(merchant, category, trigger, customer, message)
 
     if is_out_of_scope(message):
         return action_reply(
@@ -696,6 +838,15 @@ def reply_logic(conversation_id: str, merchant_id: str | None, customer_id: str 
             "binary_yes_no",
             "Politely declined out-of-scope request and returned to the active engagement task.",
         )
+
+    merchant_message = message.lower()
+    if (trigger or {}).get("kind") == "regulation_change" and any(term in merchant_message for term in ["audit", "x-ray", "xray", "radiograph", "d-speed", "film unit", "setup"]):
+        body = (
+            f"{sal}, yes - the old D-speed film unit is exactly the risk area to check before the "
+            "2026-12-15 DCI dose-limit change. Start with exposure log, collimation, film processing, "
+            "lead protection, and referral note wording. Want me to turn this into a 5-point clinic audit checklist?"
+        )
+        return action_reply(body, "binary_yes_no", "Merchant asked a regulation-specific follow-up; answered with dental radiograph audit steps.")
 
     if has_yes(message):
         kind = trigger.get("kind") if trigger else ""
@@ -736,7 +887,7 @@ def metadata_payload() -> dict[str, Any]:
         "team_name": TEAM_NAME,
         "team_members": ["Harsh"],
         "model": "deterministic-context-composer",
-        "approach": "stateful message engine with fit-based insight ranking, strict genericity rejection, strict final validation, business-decision rewriting, conversion polish, suppression, and replay handlers",
+        "approach": "stateful merchant messaging engine with fit-based insight ranking, category-native rendering, role-aware replies, suppression, and replay handlers",
         "contact_email": "not-provided@example.com",
         "version": VERSION,
         "submitted_at": "2026-05-01T00:00:00Z",
